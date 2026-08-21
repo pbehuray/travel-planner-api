@@ -36,6 +36,22 @@ export async function runValidator(context: ValidatorContext): Promise<Validatio
     message: `Budget total ${budget.total} vs trip budget ${tripSpec.budget}.`,
   });
 
+  const paidTransportKeywords = ['auto', 'taxi', 'private car', 'cab', 'uber', 'lyft', 'train', 'bus', 'subway', 'metro', 'flight', 'rickshaw', 'tuk-tuk', 'tempo', 'shuttle', 'car', 'driver', 'hire'];
+  const hasPaidTransport = draft.days.some((day) => {
+    const raw = (day as any).transport;
+    if (!raw) return false;
+    const dayTransport = typeof raw === 'string' ? raw : (raw.mode ? `${raw.mode} ${raw.costEstimate || ''}`.trim() : String(raw));
+    return paidTransportKeywords.some((kw) => dayTransport.toLowerCase().includes(kw));
+  });
+  const transportCostMissing = hasPaidTransport && budget.breakdown.transport === 0;
+  checks.push({
+    name: 'transport_cost_plausible',
+    status: transportCostMissing ? 'fail' : 'pass',
+    message: transportCostMissing
+      ? 'Itinerary uses paid transport (auto, taxi, private car, etc.) but the transport budget is 0.'
+      : 'Transport budget aligns with itinerary.',
+  });
+
   const llmPrompt = `
 You are a travel-plan validator. Return only valid JSON with no markdown, no code fences, no preamble.
 
@@ -66,9 +82,15 @@ Return a JSON object with:
   const existing = new Set(llmReport.checks.map((c) => c.name));
   const merged = [...llmReport.checks, ...checks.filter((c) => !existing.has(c.name))];
 
+  const failedChecks = merged.filter((c) => c.status !== 'pass');
+  const repairInstructions = [
+    ...new Set([...(llmReport.repairInstructions || []), ...failedChecks.map((c) => c.message)]),
+  ];
+
   return {
     ...llmReport,
     checks: merged,
+    repairInstructions,
     passed: llmReport.passed && merged.every((c) => c.status !== 'fail'),
   };
 }

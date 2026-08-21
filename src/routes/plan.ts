@@ -23,11 +23,23 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const plan = await planTrip({ request, userId }, llmDataSource);
 
+    // Normalize day transport to string to match the Trip schema
+    const normalizedDays = plan.draft.days.map((day) => {
+      const transport = typeof day.transport === 'object' && day.transport !== null
+        ? `${(day.transport as { mode?: string }).mode || ''} ${(day.transport as { costEstimate?: number }).costEstimate ?? ''}`.trim()
+        : (day.transport || '');
+      return { ...day, transport };
+    });
+
     const trip = await Trip.create({
       userId,
       request,
       tripSpec: plan.tripSpec,
-      itinerary: plan.draft,
+      itinerary: {
+        days: normalizedDays,
+        hotels: plan.draft.hotels,
+        disclaimer: plan.draft.disclaimer,
+      },
       budget: plan.budget,
       review: {
         score: plan.validation.score,

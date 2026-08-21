@@ -25,12 +25,15 @@ export async function runAccommodation(context: AccommodationContext): Promise<A
     },
     {
       role: 'user' as const,
-      content: `Recommend accommodation for a ${tripSpec.duration}-day trip to ${tripSpec.destination}. Budget: ${tripSpec.budget || 'not specified'} ${tripSpec.currency || 'USD'}.\n\nSuggested hotels from data source:\n${hotels.map((h) => `- ${h.name} in ${h.area} (${h.tier}): ~${h.estimatedCost} ${h.currency}`).join('\n')}\n\nReturn a JSON object with two arrays:\n- neighborhoods: each item is {name: string, pros: string[], cons: string[], bestFor: string[]}\n- hotels: each item is {name: string, area: string, tier: string, estimatedCost: number, currency: string, why: string}\n\nAll values for pros, cons, and bestFor MUST be arrays of strings.`,
+      content: `Recommend accommodation for a ${tripSpec.duration}-day trip to ${tripSpec.destination}. Budget: ${tripSpec.budget || 'not specified'} ${tripSpec.currency || 'USD'}.\n\nSuggested hotels from data source:\n${hotels.map((h) => `- ${h.name} in ${h.area} (${h.tier}): ~${h.estimatedCost} ${h.currency}`).join('\n')}\n\nReturn a JSON object with two arrays:\n- neighborhoods: each item is {name: string, pros: string[], cons: string[], bestFor: string[]}\n- hotels: each item is {name: string, area: string, tier: string (must be exactly "budget", "mid-range", or "luxury"), estimatedCost: number, currency: string, why: string}\n\nAll values for pros, cons, and bestFor MUST be arrays of strings. Use only the three allowed tier values.`,
     },
   ];
 
   const raw = await callLLM(messages, { provider: LLM_CONFIG.assignments.accommodation });
   const parsed = JSON.parse(raw);
+  if (parsed.hotels && Array.isArray(parsed.hotels)) {
+    console.warn(`[Accommodation] raw LLM tier values: ${JSON.stringify(parsed.hotels.map((h: any) => h.tier))}`);
+  }
   const validated = accommodationOptionsSchema.parse(parsed);
   return validated;
 }

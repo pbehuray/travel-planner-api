@@ -140,16 +140,33 @@ async function buildDraft(state: OrchestratorState) {
 
   const raw = await callLLM(messages, { provider: LLM_CONFIG.assignments.orchestrator });
   const parsed = JSON.parse(raw);
+  if (parsed.days && Array.isArray(parsed.days)) {
+    for (const day of parsed.days) {
+      if (typeof day.transport === 'object' && day.transport !== null) {
+        day.transport = `${day.transport.mode || ''} ${day.transport.costEstimate || ''}`.trim();
+      }
+    }
+  }
   state.draft = parsed as DraftItinerary;
   log(state, 'Draft itinerary built');
 }
 
-async function runBudgetAgent(state: OrchestratorState) {
+async function runBudgetAgent(state: OrchestratorState, attempt = 0) {
   if (!state.tripSpec || !state.draft) throw new Error('Missing inputs for budget');
   log(state, 'Running budget agent');
+
+  const repairInstructions = attempt > 0 && state.validation
+    ? (state.validation.repairInstructions || state.validation.checks.filter((c) => c.status !== 'pass').map((c) => c.message))
+    : undefined;
+
   state.budget = await withTimeout(
     'budget',
-    runBudget({ tripSpec: state.tripSpec, draft: state.draft }),
+    runBudget({
+      tripSpec: state.tripSpec,
+      draft: state.draft,
+      repairInstructions,
+      attempt,
+    }),
     AGENT_TIMEOUT_MS
   );
   log(state, `Budget complete: total=${state.budget.total}, withinBudget=${state.budget.withinBudget}`);
@@ -186,8 +203,8 @@ async function repair(state: OrchestratorState) {
   state.draft = parsed as DraftItinerary;
   state.repairCount += 1;
 
-  // Re-run budget after repair
-  await runBudgetAgent(state);
+  // Re-run budget after repair with attempt context and instructions
+  await runBudgetAgent(state, state.repairCount);
 }
 
 export async function planTrip(input: PlanInput, dataSource: DataSource): Promise<PlanResult> {

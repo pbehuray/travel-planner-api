@@ -48,7 +48,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function callGroq(model: string, apiKey: string, messages: LlmMessage[]): Promise<string> {
+async function callGroq(model: string, apiKey: string, messages: LlmMessage[], maxTokens?: number): Promise<string> {
   if (!apiKey) throw new Error('GROQ_API_KEY not set');
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -61,6 +61,7 @@ async function callGroq(model: string, apiKey: string, messages: LlmMessage[]): 
       model,
       messages,
       response_format: { type: 'json_object' },
+      max_tokens: maxTokens || 4096,
     }),
   });
 
@@ -77,7 +78,7 @@ async function callGroq(model: string, apiKey: string, messages: LlmMessage[]): 
   return data.choices[0]?.message?.content || '';
 }
 
-async function callGemini(model: string, apiKey: string, messages: LlmMessage[]): Promise<string> {
+async function callGemini(model: string, apiKey: string, messages: LlmMessage[], maxTokens?: number): Promise<string> {
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
 
   const prompt = messages.map((m) => m.content).join('\n\n');
@@ -88,6 +89,7 @@ async function callGemini(model: string, apiKey: string, messages: LlmMessage[])
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: maxTokens || 4096 },
     }),
   });
 
@@ -135,15 +137,19 @@ export async function callLLM(messages: LlmMessage[], options: LlmOptions): Prom
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const raw = options.provider === 'groq'
-        ? await callGroq(model, apiKey, messages)
-        : await callGemini(model, apiKey, messages);
+        ? await callGroq(model, apiKey, messages, options.maxTokens)
+        : await callGemini(model, apiKey, messages, options.maxTokens);
       const cleaned = stripMarkdownFences(raw);
       setCache(cacheKey, cleaned);
       return cleaned;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (lastError.message.includes('Rate limited') && attempt === 0) {
-        await sleep(2000);
+        const now = new Date();
+        const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+        const wait = Math.max(msToNextMinute, 2000);
+        console.log(`Rate limited on ${options.provider}, waiting ${Math.round(wait / 1000)}s for per-minute window to reset...`);
+        await sleep(wait);
         continue;
       }
       break;

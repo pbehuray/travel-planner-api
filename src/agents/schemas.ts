@@ -35,6 +35,14 @@ export const destinationResearchSchema = z.object({
   })),
 });
 
+const normalizedTier = (val: unknown) => {
+  const str = String(val).toLowerCase().trim();
+  if (['budget', 'cheap', 'economy', 'low', 'affordable'].includes(str)) return 'budget';
+  if (['mid-range', 'midrange', 'standard', 'moderate', 'mid', 'average', '3-star', '3 star', 'three-star'].includes(str)) return 'mid-range';
+  if (['luxury', 'high-end', 'highend', 'premium', 'deluxe', 'expensive', '5-star', '5 star', 'five-star', 'upscale'].includes(str)) return 'luxury';
+  return 'mid-range';
+};
+
 export const accommodationOptionsSchema = z.object({
   neighborhoods: z.array(z.object({
     name: z.string(),
@@ -45,7 +53,7 @@ export const accommodationOptionsSchema = z.object({
   hotels: z.array(z.object({
     name: z.string(),
     area: z.string(),
-    tier: z.enum(['budget', 'mid-range', 'luxury']),
+    tier: z.preprocess(normalizedTier, z.enum(['budget', 'mid-range', 'luxury'])),
     estimatedCost: z.number().nonnegative(),
     currency: z.string().default('USD'),
     why: z.string().optional(),

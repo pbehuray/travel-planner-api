@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "echo 'No build needed - using tsx'",
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "verify:db": "tsx src/scripts/verifyDb.ts"
   },
   "keywords": [],
   "author": "",
@@ -16,6 +17,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "mongoose": "^9.9.3",
     "tsx": "^4.19.2"
   },
   "devDependencies": {

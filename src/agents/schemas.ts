@@ -112,6 +112,18 @@ export const validationReportSchema = z.object({
   repairInstructions: z.array(z.string()).optional(),
 });
 
+export function dedupeHotels<T extends { name: string; area: string }>(hotels: T[]): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const hotel of hotels) {
+    const key = `${hotel.name.trim().toLowerCase()}|${hotel.area.trim().toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(hotel);
+  }
+  return result;
+}
+
 export type TripSpec = z.infer<typeof tripSpecSchema>;
 export type DestinationResearch = z.infer<typeof destinationResearchSchema>;
 export type AccommodationOptions = z.infer<typeof accommodationOptionsSchema>;

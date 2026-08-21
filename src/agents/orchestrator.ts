@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { tripSpecSchema, daySchema, type TripSpec, type DraftItinerary, type BudgetBreakdown, type ValidationReport, type DestinationResearch, type AccommodationOptions } from './schemas.js';
+import { tripSpecSchema, daySchema, dedupeHotels, type TripSpec, type DraftItinerary, type BudgetBreakdown, type ValidationReport, type DestinationResearch, type AccommodationOptions } from './schemas.js';
 import { runResearch } from './research.js';
 import { runAccommodation } from './accommodation.js';
 import { runBudget } from './budget.js';
@@ -149,6 +149,9 @@ async function buildDraft(state: OrchestratorState) {
       }
     }
   }
+  if (parsed.hotels && Array.isArray(parsed.hotels)) {
+    parsed.hotels = dedupeHotels(parsed.hotels);
+  }
   state.draft = parsed as DraftItinerary;
   log(state, 'Draft itinerary built');
 }
@@ -202,6 +205,9 @@ async function repair(state: OrchestratorState) {
 
   const raw = await callLLM(messages, { provider: LLM_CONFIG.assignments.budget });
   const parsed = JSON.parse(raw);
+  if (parsed.hotels && Array.isArray(parsed.hotels)) {
+    parsed.hotels = dedupeHotels(parsed.hotels);
+  }
   state.draft = parsed as DraftItinerary;
   state.repairCount += 1;
 
@@ -397,6 +403,7 @@ export async function regenerateDay(input: RegenerateDayInput): Promise<Regenera
   const mergedDraft: DraftItinerary = {
     ...draft,
     days: draft.days.map((d) => (d.day === dayNumber ? newDay : d)),
+    hotels: dedupeHotels(draft.hotels),
   };
 
   let budget: BudgetBreakdown;

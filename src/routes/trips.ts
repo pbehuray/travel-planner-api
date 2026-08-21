@@ -3,7 +3,15 @@ import type { Request, Response } from 'express';
 import { Trip } from '../models/Trip.js';
 import { regenerateDay } from '../agents/orchestrator.js';
 import { llmDataSource } from '../agents/dataSource.js';
-import type { TripSpec, DraftItinerary } from '../agents/schemas.js';
+import { dedupeHotels, type TripSpec, type DraftItinerary } from '../agents/schemas.js';
+
+function withDedupedHotels(trip: any) {
+  const obj = typeof trip.toObject === 'function' ? trip.toObject() : trip;
+  if (obj?.itinerary?.hotels && Array.isArray(obj.itinerary.hotels)) {
+    obj.itinerary.hotels = dedupeHotels(obj.itinerary.hotels);
+  }
+  return obj;
+}
 
 const router = Router();
 
@@ -48,7 +56,7 @@ router.get('/', async (req: Request, res: Response) => {
       return;
     }
     const trips = await Trip.find({ userId }).sort({ createdAt: -1 });
-    res.json(trips);
+    res.json(trips.map(withDedupedHotels));
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to fetch trips' });
   }
@@ -67,7 +75,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'Trip not found' });
       return;
     }
-    res.json(trip);
+    res.json(withDedupedHotels(trip));
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to fetch trip' });
   }
@@ -82,6 +90,9 @@ router.post('/', async (req: Request, res: Response) => {
       return;
     }
     const { request, tripSpec, itinerary, budget } = req.body;
+    if (itinerary?.hotels && Array.isArray(itinerary.hotels)) {
+      itinerary.hotels = dedupeHotels(itinerary.hotels);
+    }
     const trip = await Trip.create({
       userId,
       request,
@@ -89,7 +100,7 @@ router.post('/', async (req: Request, res: Response) => {
       itinerary,
       budget,
     });
-    res.status(201).json(trip);
+    res.status(201).json(withDedupedHotels(trip));
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to create trip' });
   }
@@ -112,7 +123,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'Trip not found' });
       return;
     }
-    res.json(trip);
+    res.json(withDedupedHotels(trip));
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to update trip' });
   }
@@ -164,7 +175,7 @@ router.delete('/:id/days/:day/activities/:idx', async (req: Request, res: Respon
     day.activities.splice(idx, 1);
     trip.markModified('itinerary');
     await trip.save();
-    res.json(trip);
+    res.json(withDedupedHotels(trip));
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to remove activity' });
   }
@@ -197,7 +208,7 @@ router.post('/:id/days/:day/activities', async (req: Request, res: Response) => 
     day.activities.push({ time, name, category, description, costEstimate });
     trip.markModified('itinerary');
     await trip.save();
-    res.status(201).json(trip);
+    res.status(201).json(withDedupedHotels(trip));
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to add activity' });
   }
@@ -246,7 +257,7 @@ router.post('/:id/days/:day/regenerate', async (req: Request, res: Response) => 
     };
     trip.markModified('itinerary');
     await trip.save();
-    res.json({ ...trip.toObject(), warnings: result.warnings });
+    res.json({ ...withDedupedHotels(trip), warnings: result.warnings });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to regenerate day' });
   }

@@ -1,5 +1,5 @@
 import { callLLM } from './llmClient.js';
-import { accommodationOptionsSchema, type TripSpec, type AccommodationOptions } from './schemas.js';
+import { accommodationOptionsSchema, dedupeHotels, type TripSpec, type AccommodationOptions } from './schemas.js';
 import type { DestinationResearch } from './schemas.js';
 import type { DataSource } from './dataSource.js';
 import { LLM_CONFIG } from './config.js';
@@ -35,5 +35,5 @@ export async function runAccommodation(context: AccommodationContext): Promise<A
     console.warn(`[Accommodation] raw LLM tier values: ${JSON.stringify(parsed.hotels.map((h: any) => h.tier))}`);
   }
   const validated = accommodationOptionsSchema.parse(parsed);
-  return validated;
+  return { ...validated, hotels: dedupeHotels(validated.hotels) };
 }

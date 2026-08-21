@@ -13,6 +13,7 @@ export interface IActivity {
   name: string;
   category: string;
   description: string;
+  costEstimate?: number;
 }
 
 export interface IDay {
@@ -53,6 +54,7 @@ export interface ITripSpec {
   budget?: number;
   interests?: string[];
   travelers?: number;
+  currency?: string;
 }
 
 export interface IReview {

@@ -7,6 +7,7 @@ const activitySchema = new Schema(
     name: { type: String, required: true },
     category: { type: String, required: true },
     description: { type: String, required: true },
+    costEstimate: { type: Number },
   },
   { _id: false }
 );
@@ -62,6 +63,7 @@ const tripSpecSchema = new Schema(
     budget: { type: Number },
     interests: { type: [String], default: [] },
     travelers: { type: Number },
+    currency: { type: String, default: 'USD' },
   },
   { _id: false }
 );

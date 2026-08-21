@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { tripSpecSchema, type TripSpec, type DraftItinerary, type BudgetBreakdown, type ValidationReport, type DestinationResearch, type AccommodationOptions } from './schemas.js';
+import { tripSpecSchema, daySchema, type TripSpec, type DraftItinerary, type BudgetBreakdown, type ValidationReport, type DestinationResearch, type AccommodationOptions } from './schemas.js';
 import { runResearch } from './research.js';
 import { runAccommodation } from './accommodation.js';
 import { runBudget } from './budget.js';
@@ -333,4 +333,94 @@ export async function planTrip(input: PlanInput, dataSource: DataSource): Promis
     logs: state.logs,
     warnings: state.warnings,
   };
+}
+
+export interface RegenerateDayInput {
+  tripSpec: TripSpec;
+  draft: DraftItinerary;
+  dayNumber: number;
+  instruction?: string;
+  dataSource: DataSource;
+}
+
+export interface RegenerateDayResult {
+  draft: DraftItinerary;
+  budget: BudgetBreakdown;
+  validation: ValidationReport;
+  warnings: string[];
+}
+
+// Regenerates a single day of an existing itinerary without re-running the whole
+// planTrip pipeline. Scopes research to a 1-day trip, merges the new day back into
+// the existing draft (other days untouched), then re-runs budget + validator on the
+// FULL itinerary so the plan's budget/validation stay honest after the edit.
+export async function regenerateDay(input: RegenerateDayInput): Promise<RegenerateDayResult> {
+  const { tripSpec, draft, dayNumber, instruction, dataSource } = input;
+  const warnings: string[] = [];
+
+  const existingDay = draft.days.find((d) => d.day === dayNumber);
+  if (!existingDay) {
+    throw new Error(`Day ${dayNumber} not found in itinerary`);
+  }
+
+  const dayTripSpec: TripSpec = { ...tripSpec, duration: 1 };
+  let dayResearch: DestinationResearch;
+  try {
+    dayResearch = await withTimeout('regenerate-research', runResearch({ tripSpec: dayTripSpec, dataSource }), AGENT_TIMEOUT_MS);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    warnings.push(`regenerate research failed: ${message}`);
+    dayResearch = {
+      destinations: [{ name: tripSpec.destination, description: 'Research unavailable', highlights: [], mustSee: [] }],
+      transport: { betweenCities: [], localTips: [] },
+      crowdTips: [],
+      daySkeleton: [{ day: 1, city: tripSpec.destination, focus: existingDay.neighborhood || 'explore' }],
+    };
+  }
+
+  const messages = [
+    { role: 'system' as const, content: 'You are an itinerary merger. Return only valid JSON with no markdown, no code fences, no preamble.' },
+    {
+      role: 'user' as const,
+      content: `Regenerate ONLY day ${dayNumber} of a ${tripSpec.duration}-day trip to ${tripSpec.destination}. Budget: ${tripSpec.budget || 'not specified'} ${tripSpec.currency}. Interests: ${(tripSpec.interests || []).join(', ')}.\n\nCurrent day being replaced:\n${JSON.stringify(existingDay)}\n\nResearch for this day: ${JSON.stringify(dayResearch.destinations)}\nDay focus: ${JSON.stringify(dayResearch.daySkeleton)}\n${instruction ? `User instruction: ${instruction}\n` : ''}\nReturn JSON for a SINGLE day object only: {day, location, activities: [{time, name, category, description, costEstimate}], transport, neighborhood}. The "day" field MUST be ${dayNumber}.`,
+    },
+  ];
+
+  const raw = await callLLM(messages, { provider: LLM_CONFIG.assignments.orchestrator });
+  const parsed = JSON.parse(raw);
+  if (typeof parsed.transport === 'object' && parsed.transport !== null) {
+    parsed.transport = `${parsed.transport.mode || ''} ${parsed.transport.costEstimate || ''}`.trim();
+  }
+  parsed.day = dayNumber;
+  const newDay = daySchema.parse(parsed);
+
+  const mergedDraft: DraftItinerary = {
+    ...draft,
+    days: draft.days.map((d) => (d.day === dayNumber ? newDay : d)),
+  };
+
+  let budget: BudgetBreakdown;
+  try {
+    budget = await withTimeout('regenerate-budget', runBudget({ tripSpec, draft: mergedDraft }), AGENT_TIMEOUT_MS);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    warnings.push(`regenerate budget failed: ${message}`);
+    budget = { total: 0, breakdown: { accommodation: 0, food: 0, transport: 0, activities: 0 }, withinBudget: false };
+  }
+
+  let validation: ValidationReport;
+  try {
+    validation = await withTimeout('regenerate-validate', runValidator({ tripSpec, draft: mergedDraft, budget }), AGENT_TIMEOUT_MS);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    warnings.push(`regenerate validation failed: ${message}`);
+    validation = {
+      passed: false,
+      score: 0,
+      checks: [{ name: 'validation_unavailable', status: 'warn' as const, message: 'Validation could not be completed.' }],
+      repairInstructions: [],
+    };
+  }
+
+  return { draft: mergedDraft, budget, validation, warnings };
 }

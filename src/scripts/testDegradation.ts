@@ -86,7 +86,7 @@ function mockTripSpec() {
   };
 }
 
-function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+function mockFetch(input: string | URL, init?: RequestInit): Promise<Response> {
   const prompt = getPromptText(String(input), init);
   let payload: any = {};
   if (prompt.includes('travel request parser')) {
@@ -181,7 +181,7 @@ async function testRouteStill200() {
           body: JSON.stringify({ request: '2 days Paris, $1500, food and museums' }),
         });
 
-        const data = await res.json();
+        const data = await res.json() as { _id?: string; warnings?: string[]; review?: { feedback?: string } };
         console.log('HTTP status:', res.status);
         console.log('response _id:', data._id);
         console.log('response warnings:', data.warnings);

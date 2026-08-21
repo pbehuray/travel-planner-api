@@ -1,7 +1,8 @@
 import dotenv from 'dotenv';
-import { connectDB, disconnectDB } from '../lib/db.js';
 
 dotenv.config();
+
+import { connectDB, disconnectDB } from '../lib/db.js';
 
 async function main() {
   try {

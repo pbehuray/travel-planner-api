@@ -255,6 +255,11 @@ router.post('/:id/days/:day/regenerate', async (req: Request, res: Response) => 
       ].join('\n'),
       validatedAt: new Date(),
     };
+    if (trip.buildTrace) {
+      trip.buildTrace.checks = result.validation.checks;
+      trip.buildTrace.validatorScore = result.validation.score;
+      trip.buildTrace.validatorPassed = result.validation.passed;
+    }
     trip.markModified('itinerary');
     await trip.save();
     res.json({ ...withDedupedHotels(trip), warnings: result.warnings });

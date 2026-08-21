@@ -51,6 +51,7 @@ router.post('/', async (req: Request, res: Response) => {
         feedback: feedbackLines.join('\n'),
         validatedAt: new Date(),
       },
+      buildTrace: plan.buildTrace,
     });
 
     res.status(200).json({

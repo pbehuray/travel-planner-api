@@ -26,6 +26,27 @@ export interface PlanResult {
   repairCount: number;
   logs: string[];
   warnings: string[];
+  buildTrace: BuildTrace;
+}
+
+export type AgentProvider = 'groq' | 'gemini';
+export type PipelineStepStatus = 'ok' | 'fallback';
+
+export interface PipelineStep {
+  agent: string;
+  section: string;
+  provider: AgentProvider;
+  status: PipelineStepStatus;
+}
+
+export interface BuildTrace {
+  runId: string;
+  pipeline: PipelineStep[];
+  checks: { name: string; status: 'pass' | 'fail' | 'warn'; message: string }[];
+  repairCount: number;
+  repairProvider?: AgentProvider;
+  validatorScore?: number;
+  validatorPassed?: boolean;
 }
 
 export interface AgentPhase {
@@ -329,6 +350,57 @@ export async function planTrip(input: PlanInput, dataSource: DataSource): Promis
     state.warnings.push('validation unavailable');
   }
 
+  const hasWarning = (substr: string) => state.warnings.some((w) => w.includes(substr));
+
+  const pipeline: PipelineStep[] = [
+    {
+      agent: 'orchestrator',
+      section: 'parsed trip constraints',
+      provider: LLM_CONFIG.assignments.orchestrator,
+      status: hasWarning('placeholder trip spec') ? 'fallback' : 'ok',
+    },
+    {
+      agent: 'research',
+      section: 'destinations, day-by-day focus, transport tips',
+      provider: LLM_CONFIG.assignments.research,
+      status: hasWarning('research unavailable') ? 'fallback' : 'ok',
+    },
+    {
+      agent: 'accommodation',
+      section: 'neighborhoods & hotel suggestions',
+      provider: LLM_CONFIG.assignments.accommodation,
+      status: hasWarning('accommodation unavailable') ? 'fallback' : 'ok',
+    },
+    {
+      agent: 'orchestrator (merge)',
+      section: 'day-by-day activities & logistics',
+      provider: LLM_CONFIG.assignments.orchestrator,
+      status: hasWarning('draft merge unavailable') ? 'fallback' : 'ok',
+    },
+    {
+      agent: 'budget',
+      section: 'budget breakdown',
+      provider: LLM_CONFIG.assignments.budget,
+      status: hasWarning('budget unavailable') ? 'fallback' : 'ok',
+    },
+    {
+      agent: 'validator',
+      section: 'validation checklist & score',
+      provider: LLM_CONFIG.assignments.validator,
+      status: hasWarning('validation unavailable') ? 'fallback' : 'ok',
+    },
+  ];
+
+  const buildTrace: BuildTrace = {
+    runId,
+    pipeline,
+    checks: state.validation.checks,
+    repairCount: state.repairCount,
+    repairProvider: state.repairCount > 0 ? LLM_CONFIG.assignments.budget : undefined,
+    validatorScore: state.validation.score,
+    validatorPassed: state.validation.passed,
+  };
+
   return {
     runId,
     tripSpec: state.tripSpec,
@@ -337,6 +409,7 @@ export async function planTrip(input: PlanInput, dataSource: DataSource): Promis
     validation: state.validation,
     repairCount: state.repairCount,
     logs: state.logs,
+    buildTrace,
     warnings: state.warnings,
   };
 }

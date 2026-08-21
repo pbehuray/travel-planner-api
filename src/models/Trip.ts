@@ -77,6 +77,38 @@ const reviewSchema = new Schema(
   { _id: false }
 );
 
+const pipelineStepSchema = new Schema(
+  {
+    agent: { type: String, required: true },
+    section: { type: String, required: true },
+    provider: { type: String, enum: ['groq', 'gemini'], required: true },
+    status: { type: String, enum: ['ok', 'fallback'], required: true },
+  },
+  { _id: false }
+);
+
+const validationCheckSchema = new Schema(
+  {
+    name: { type: String, required: true },
+    status: { type: String, enum: ['pass', 'fail', 'warn'], required: true },
+    message: { type: String, required: true },
+  },
+  { _id: false }
+);
+
+const buildTraceSchema = new Schema(
+  {
+    runId: { type: String },
+    pipeline: { type: [pipelineStepSchema], default: [] },
+    checks: { type: [validationCheckSchema], default: [] },
+    repairCount: { type: Number, default: 0 },
+    repairProvider: { type: String, enum: ['groq', 'gemini'] },
+    validatorScore: { type: Number },
+    validatorPassed: { type: Boolean },
+  },
+  { _id: false }
+);
+
 const tripSchema = new Schema<ITrip>(
   {
     userId: {
@@ -93,6 +125,7 @@ const tripSchema = new Schema<ITrip>(
     itinerary: { type: itinerarySchema, default: () => ({ days: [], hotels: [] }) },
     budget: { type: budgetSchema, default: () => ({ total: 0, breakdown: { accommodation: 0, food: 0, transport: 0, activities: 0 }, withinBudget: true }) },
     review: { type: reviewSchema, default: {} },
+    buildTrace: { type: buildTraceSchema },
   },
   {
     timestamps: true,

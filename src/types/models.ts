@@ -63,6 +63,29 @@ export interface IReview {
   validatedAt?: Date;
 }
 
+export interface IPipelineStep {
+  agent: string;
+  section: string;
+  provider: 'groq' | 'gemini';
+  status: 'ok' | 'fallback';
+}
+
+export interface IValidationCheck {
+  name: string;
+  status: 'pass' | 'fail' | 'warn';
+  message: string;
+}
+
+export interface IBuildTrace {
+  runId?: string;
+  pipeline: IPipelineStep[];
+  checks: IValidationCheck[];
+  repairCount: number;
+  repairProvider?: 'groq' | 'gemini';
+  validatorScore?: number;
+  validatorPassed?: boolean;
+}
+
 export interface ITrip extends Document {
   _id: Types.ObjectId;
   userId: Types.ObjectId;
@@ -71,6 +94,7 @@ export interface ITrip extends Document {
   itinerary: IItinerary;
   budget: IBudget;
   review?: IReview;
+  buildTrace?: IBuildTrace;
   createdAt: Date;
   updatedAt: Date;
 }

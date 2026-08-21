@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -24,6 +25,7 @@ interface CacheEntry {
 
 const inMemoryCache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 1000 * 60 * 60; // 1 hour
+const MAX_RATE_LIMIT_WAIT_MS = 20000; // cap backoff so it doesn't exhaust agent timeout
 
 function buildCacheKey(provider: string, model: string, messages: LlmMessage[]): string {
   const text = messages.map((m) => `${m.role}:${m.content}`).join('|');
@@ -123,14 +125,23 @@ function stripMarkdownFences(text: string): string {
   return trimmed;
 }
 
+function shortCacheKey(key: string): string {
+  return crypto.createHash('sha1').update(key).digest('hex').slice(0, 10);
+}
+
 export async function callLLM(messages: LlmMessage[], options: LlmOptions): Promise<string> {
   const config = LLM_CONFIG.providers[options.provider];
   const model = config.model;
   const apiKey = config.apiKey;
   const cacheKey = buildCacheKey(options.provider, model, messages);
+  const shortKey = shortCacheKey(cacheKey);
 
   const cached = getCache(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    console.log(`[LLM cache] HIT  ${options.provider}:${model}:${shortKey}`);
+    return cached;
+  }
+  console.log(`[LLM cache] MISS ${options.provider}:${model}:${shortKey}`);
 
   let lastError: Error | undefined;
 
@@ -147,7 +158,7 @@ export async function callLLM(messages: LlmMessage[], options: LlmOptions): Prom
       if (lastError.message.includes('Rate limited') && attempt === 0) {
         const now = new Date();
         const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
-        const wait = Math.max(msToNextMinute, 2000);
+        const wait = Math.min(Math.max(msToNextMinute, 2000), MAX_RATE_LIMIT_WAIT_MS);
         console.log(`Rate limited on ${options.provider}, waiting ${Math.round(wait / 1000)}s for per-minute window to reset...`);
         await sleep(wait);
         continue;

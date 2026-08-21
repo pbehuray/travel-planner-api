@@ -25,6 +25,7 @@ export interface PlanResult {
   validation: ValidationReport;
   repairCount: number;
   logs: string[];
+  warnings: string[];
 }
 
 export interface AgentPhase {
@@ -46,6 +47,7 @@ interface OrchestratorState {
   validation: ValidationReport | null;
   repairCount: number;
   logs: string[];
+  warnings: string[];
   dataSource: DataSource;
 }
 
@@ -221,6 +223,7 @@ export async function planTrip(input: PlanInput, dataSource: DataSource): Promis
     validation: null,
     repairCount: 0,
     logs: [],
+    warnings: [],
     dataSource,
   };
 
@@ -238,17 +241,86 @@ export async function planTrip(input: PlanInput, dataSource: DataSource): Promis
   for (const phase of phases) {
     log(state, `Running phase: ${phase.name}`);
     const timeout = phase.timeout || AGENT_TIMEOUT_MS;
-    await withTimeout(phase.name, phase.run(state), timeout);
+    try {
+      await withTimeout(phase.name, phase.run(state), timeout);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      state.warnings.push(`${phase.name} failed: ${message}`);
+      log(state, `Phase ${phase.name} failed: ${message}`);
+    }
   }
 
   // Repair loop
-  while (state.validation && !state.validation.passed && state.repairCount < MAX_REPAIRS) {
-    await repair(state);
-    await validate(state);
+  if (state.draft && state.budget && state.validation && !state.validation.passed) {
+    try {
+      while (state.validation && !state.validation.passed && state.repairCount < MAX_REPAIRS) {
+        await repair(state);
+        await validate(state);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      state.warnings.push(`repair failed: ${message}`);
+      log(state, `Repair failed: ${message}`);
+    }
   }
 
-  if (!state.tripSpec || !state.draft || !state.budget || !state.validation) {
-    throw new Error('Orchestrator did not produce a complete plan');
+  // Ensure every required field has a usable fallback so the API never 500s
+  if (!state.tripSpec) {
+    state.tripSpec = {
+      destination: 'unknown',
+      duration: 1,
+      interests: [],
+      currency: 'USD',
+    };
+    state.warnings.push('parse failed: using placeholder trip spec');
+  }
+  if (!state.research) {
+    state.research = {
+      destinations: [{ name: state.tripSpec.destination, description: 'Research unavailable', highlights: [], mustSee: [] }],
+      transport: { betweenCities: [], localTips: [] },
+      crowdTips: [],
+      daySkeleton: Array.from({ length: state.tripSpec.duration }, (_, i) => ({ day: i + 1, city: state.tripSpec!.destination, focus: 'explore' })),
+    };
+    state.warnings.push('research unavailable: using skeleton research');
+  }
+  if (!state.accommodation) {
+    state.accommodation = {
+      neighborhoods: [{ name: 'city center', pros: ['central'], cons: [], bestFor: ['first-time visitors'] }],
+      hotels: [{ name: 'Fallback Hotel', area: 'city center', tier: 'mid-range', estimatedCost: 100, currency: 'USD', why: 'Fallback hotel' }],
+    };
+    state.warnings.push('accommodation unavailable: using fallback hotel');
+  }
+  if (!state.draft) {
+    state.draft = {
+      days: Array.from({ length: state.tripSpec.duration }, (_, i) => ({
+        day: i + 1,
+        location: state.tripSpec!.destination,
+        activities: [],
+        transport: '',
+        neighborhood: 'city center',
+      })),
+      hotels: [],
+      logistics: ['Plan generation was interrupted; some agents were unavailable.'],
+      disclaimer: 'This is a partial plan. Please regenerate to get a full itinerary.',
+    };
+    state.warnings.push('draft merge unavailable: using skeleton itinerary');
+  }
+  if (!state.budget) {
+    state.budget = {
+      total: 0,
+      breakdown: { accommodation: 0, food: 0, transport: 0, activities: 0 },
+      withinBudget: false,
+    };
+    state.warnings.push('budget unavailable: using zero budget');
+  }
+  if (!state.validation) {
+    state.validation = {
+      passed: false,
+      score: 0,
+      checks: [{ name: 'validation_unavailable', status: 'warn' as const, message: 'Validation could not be completed.' }],
+      repairInstructions: [],
+    };
+    state.warnings.push('validation unavailable');
   }
 
   return {
@@ -259,5 +331,6 @@ export async function planTrip(input: PlanInput, dataSource: DataSource): Promis
     validation: state.validation,
     repairCount: state.repairCount,
     logs: state.logs,
+    warnings: state.warnings,
   };
 }

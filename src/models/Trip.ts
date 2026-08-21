@@ -89,7 +89,7 @@ const tripSchema = new Schema<ITrip>(
     },
     tripSpec: { type: tripSpecSchema, default: {} },
     itinerary: { type: itinerarySchema, default: () => ({ days: [], hotels: [] }) },
-    budget: { type: budgetSchema, default: () => ({ total: 0, breakdown: {}, withinBudget: true }) },
+    budget: { type: budgetSchema, default: () => ({ total: 0, breakdown: { accommodation: 0, food: 0, transport: 0, activities: 0 }, withinBudget: true }) },
     review: { type: reviewSchema, default: {} },
   },
   {

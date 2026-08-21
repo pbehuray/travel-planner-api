@@ -13,6 +13,7 @@ async function main() {
     budget: 1500,
     interests: ['food', 'museums'],
     travelers: 2,
+    currency: 'USD',
   };
 
   try {

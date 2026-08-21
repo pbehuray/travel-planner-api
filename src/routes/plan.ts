@@ -31,6 +31,11 @@ router.post('/', async (req: Request, res: Response) => {
       return { ...day, transport };
     });
 
+    const feedbackLines = [
+      ...plan.validation.checks.map((c) => `${c.name}: ${c.status} - ${c.message}`),
+      ...plan.warnings.map((w) => `warning: ${w}`),
+    ];
+
     const trip = await Trip.create({
       userId,
       request,
@@ -43,7 +48,7 @@ router.post('/', async (req: Request, res: Response) => {
       budget: plan.budget,
       review: {
         score: plan.validation.score,
-        feedback: plan.validation.checks.map((c) => `${c.name}: ${c.status} - ${c.message}`).join('\n'),
+        feedback: feedbackLines.join('\n'),
         validatedAt: new Date(),
       },
     });
@@ -53,6 +58,7 @@ router.post('/', async (req: Request, res: Response) => {
       runId: plan.runId,
       repairCount: plan.repairCount,
       logs: plan.logs,
+      warnings: plan.warnings,
       traceId: req.traceId,
     });
   } catch (error) {

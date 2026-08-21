@@ -3,6 +3,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { healthRouter } from './routes/health.js';
 import { planRouter } from './routes/plan.js';
+import { authRouter } from './routes/auth.js';
+import { tripsRouter } from './routes/trips.js';
+import { authMiddleware } from './middleware/auth.js';
 import { errorHandler, traceIdMiddleware } from './middleware/errorHandler.js';
 
 dotenv.config();
@@ -41,7 +44,9 @@ app.use(traceIdMiddleware);
 
 // Routes
 app.use('/health', healthRouter);
-app.use('/api/plan', planRouter);
+app.use('/api/auth', authRouter);
+app.use('/api/plan', authMiddleware, planRouter);
+app.use('/api/trips', authMiddleware, tripsRouter);
 
 // Error handling middleware (must be last)
 app.use(errorHandler);

@@ -45,6 +45,21 @@ app.use(express.json());
 app.use(traceIdMiddleware);
 
 // Routes
+app.get('/', (req, res) => {
+  res.json({
+    service: 'Travel Planner API',
+    status: 'ok',
+    endpoints: [
+      '/health',
+      '/api/auth/register',
+      '/api/auth/login',
+      '/api/plan',
+      '/api/trips',
+      '/api/share/:id',
+    ],
+  });
+});
+
 app.use('/health', healthRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/share', shareRouter);

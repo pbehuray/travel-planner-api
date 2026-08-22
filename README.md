@@ -1,132 +1,196 @@
 # Travel Planner API
 
-Backend for the AI Travel Planner — a **multi-agent LLM system** that turns one
-free-text travel request into a validated, editable, day-by-day itinerary with
-a category budget and hotel suggestions, saved per user.
+Backend for an AI travel planner that turns a short natural-language request
+("5 days in Jaipur, ₹50,000, culture and food") into a structured, validated,
+day-by-day itinerary with a budget breakdown and hotel suggestions. The
+generation is powered by a **multi-agent LLM pipeline**: specialized agents
+each own one part of planning, an orchestrator coordinates them, and an
+independent validator checks the result before it reaches the user.
 
-Frontend repo: [travel-planner-web](https://github.com/pbehuray/travel-planner-web)
+This is the backend (Node/Express/TypeScript + MongoDB). The frontend lives in a
+separate repository.
 
-## Stack
+## Live
 
-- Node.js + Express + TypeScript (ESM, `tsx` for dev/run — no separate build step)
-- MongoDB (Atlas) via Mongoose
-- JWT auth (`jsonwebtoken` + `bcrypt`)
-- Zod for LLM-output validation
-- Two LLM providers: **Groq** (`openai/gpt-oss-120b`) and **Google Gemini** (`gemini-3.5-flash-lite`)
+- **App:** https://travel-planner-web-one.vercel.app
+- **API base:** https://travel-planner-api-aqml.onrender.com
+- **Frontend repo:** https://github.com/pbehuray/travel-planner-web
 
-## Why two LLM providers ("two brains")
+> The API runs on a free tier that sleeps when idle; the first request after a
+> period of inactivity may take ~30–50s to wake (cold start).
 
-Generation and validation are deliberately split across providers so the
-validator isn't grading its own homework:
+## Tech stack and why
 
-| Role | Agent | Provider |
+| Choice | Reason |
+|---|---|
+| **Node + Express + TypeScript** | Fast to build a typed REST API; TypeScript gives compile-time safety across the agent contracts and route layer. |
+| **MongoDB (Mongoose)** | Trip itineraries are nested, variable-shape documents — a document store fits them naturally without rigid joins. |
+| **Groq (LLM)** | Fast inference for the generation-side agents (research, accommodation, orchestration). |
+| **Google Gemini (LLM)** | A *second, independent* model for the evaluation side (budget, validator) — see "two brains" below. |
+| **Zod** | Every agent's output is validated against a schema before it's used, so malformed LLM JSON is caught at the source. |
+
+## Architecture — multi-agent pipeline
+
+The core is a **supervisor orchestrator** coordinating five stateless agents.
+Each agent has one responsibility and returns one Zod-validated artifact; only
+the orchestrator routes work and merges results (hub-and-spoke — no
+agent-to-agent calls).
+
+**Agents**
+- **Orchestrator** — parses the request into a structured trip spec, fans out to
+  the workers, merges their outputs into a draft itinerary, runs the repair
+  loop, and produces the final plan.
+- **Research** — attractions/POIs aligned to preferences, crowd-avoidance tips,
+  a day skeleton, and transport notes.
+- **Accommodation** — neighborhoods and hotel suggestions by tier (the
+  hotel-suggestion feature).
+- **Budget** — a category cost breakdown (lodging, food, transport, activities),
+  a within-budget check, and cheaper swaps. All costs are labeled estimates.
+- **Validator** — a hard gate: deterministic checks (day count matches duration,
+  all cities present, total ≤ budget, transport cost plausible) followed by an
+  LLM rubric pass (pacing, logistics realism, preference alignment). Emits a
+  pass/fail checklist and score.
+
+**Pipeline**
+```
+parse → (research ‖ accommodation) → budget → merge → validate → repair loop
+```
+Research and accommodation run together; budget consumes their output; the
+orchestrator merges into a draft; the validator gates it.
+
+### Two brains (why two LLM providers)
+
+The model that **generates** the plan (Groq) is deliberately not the model that
+**checks** it (Gemini). A validator running on the same model that produced the
+plan tends to rubber-stamp its own work. Using an independent provider for
+validation means a different model, with no stake in the output, catches
+problems the generator rationalized — in testing it flagged real issues like a
+closed attraction, an incorrect venue location, and geographically implausible
+day groupings. This "generator ≠ checker" separation is the reason the
+multi-agent design earns its complexity rather than being decoration.
+
+### Repair loop
+
+When validation fails, the orchestrator attaches the validator's specific issues
+to a targeted re-run (budget + merge only, not the whole pipeline), up to two
+attempts. If it still can't satisfy the constraints, it returns a **best-effort
+plan with the unresolved issues stated** rather than looping forever or silently
+shipping a bad plan. In practice this produces three behaviors: plans that pass
+first try, plans that fail → repair → pass, and genuinely infeasible requests
+(e.g. an impossible budget) that fail *honestly* with reasons.
+
+### Graceful degradation
+
+Every agent phase runs in a try/catch. If an agent fails or times out (e.g. an
+LLM rate limit), the pipeline degrades to a partial plan with a warning rather
+than returning a 500 — a single agent failing never takes down the whole
+request.
+
+## Authentication and data isolation
+
+- **Auth:** JWT with bcrypt-hashed passwords; a middleware verifies the token
+  and attaches the user id to every protected request.
+- **Isolation (enforced at the query level):** every trip query filters by the
+  authenticated user id — `findOne({ _id, userId })`, not fetch-then-check — so
+  a user simply gets nothing for a trip they don't own. Missing and
+  unauthorized trips both return the same 404, so the API doesn't leak which
+  trip ids exist.
+- **Public sharing (read-only):** a separate `GET /api/share/:id` route serves a
+  trip without auth for link-sharing, using **field selection at the database
+  level** (`.select('tripSpec itinerary budget')`) so owner id, email, and
+  internal metadata are never even loaded — defense in depth, not just response
+  filtering. The edit routes remain fully auth- and ownership-protected;
+  sharing is view-only.
+
+## API
+
+| Method | Route | Purpose |
 |---|---|---|
-| Parse request → trip spec | orchestrator | Groq |
-| Research destinations, day skeleton | research | Groq |
-| Hotels & neighborhoods | accommodation | Groq |
-| Merge into day-by-day draft | orchestrator | Groq |
-| Compute budget breakdown | budget | Gemini |
-| Validate the draft, score, checklist | validator | Gemini |
+| GET | `/health` | Liveness |
+| POST | `/api/auth/register` | Create account (bcrypt) |
+| POST | `/api/auth/login` | Log in, returns JWT |
+| POST | `/api/plan` | Generate + save a plan for the user |
+| GET | `/api/trips` | List the user's trips |
+| GET | `/api/trips/:id` | Fetch one of the user's trips |
+| DELETE | `/api/trips/:id/days/:day/activities/:idx` | Remove an activity |
+| POST | `/api/trips/:id/days/:day/activities` | Add an activity |
+| POST | `/api/trips/:id/days/:day/regenerate` | Regenerate one day |
+| GET | `/api/share/:id` | Public read-only view of a trip |
 
-Groq **generates** the itinerary content; Gemini independently **computes the
-budget and checks** the result. This split — plus a repair loop that feeds
-validator feedback back into a regenerate step (bounded at 2 attempts) — is
-surfaced to the end user in the frontend's "How this plan was built" panel.
+## Data sourcing
 
-## Multi-agent pipeline
+v1 is **LLM-driven**: attractions, hotels, and costs come from the model's
+knowledge, with all costs shown as labeled estimates. Agents fetch factual
+inputs through a single `dataSource` interface that currently resolves from the
+LLM — so a real places API, a RAG index, or live pricing feeds can replace the
+backing later without changing any agent. The seam is in place; real-data
+grounding is future work.
 
-`planTrip()` in `src/agents/orchestrator.ts` runs 5 agents under a single
-orchestrator with a validation gate:
+## Creative features
 
-```
-parse → research + accommodation (sequential, rate-limit aware)
-      → merge into draft itinerary
-      → budget
-      → validate
-      → [repair ⇄ re-validate, up to 2x, only if validation fails]
-```
-
-Every phase is wrapped in a timeout + try/catch; if an agent fails, the
-orchestrator falls back to a minimal placeholder for that section (and records
-a warning) instead of failing the whole request — a forced agent failure
-degrades gracefully to a partial plan rather than a 500.
-
-A compact `buildTrace` (which agent produced which section, which provider ran
-it, the validator's pass/fail checklist, repair count) is persisted on every
-`Trip` document — no secrets, no full prompts — and returned to the frontend.
-
-## Data isolation
-
-Every trip is scoped to `userId` at the query level (`Trip.find({ userId })`,
-`Trip.findOne({ _id, userId })`) across all read/write/edit routes. A user can
-never fetch, edit, or delete another user's trip, even by guessing an ID —
-attempting to do so returns `404 Not Found`, not `403`, to avoid leaking
-existence.
+- **Conversational day regeneration** — regenerate any single day with a
+  natural-language instruction ("more outdoor activities") without discarding
+  the rest of the trip. It scopes the AI to one day, merges the result back
+  leaving other days untouched, and re-validates the whole plan so the budget
+  stays honest. *Solves:* AI plans are rarely 100% right first time, and
+  regenerating everything loses the parts the user liked.
+- **"How this plan was built" panel** — surfaces which agent produced each
+  section, which LLM provider ran it, and the validator's checklist, making the
+  multi-agent reasoning transparent. *Solves:* AI plans are black boxes; this
+  shows *why* the plan looks the way it does and that it was independently
+  checked.
+- **Map, PDF export, and shareable link** (frontend) round out the product.
 
 ## Setup
 
-1. Install dependencies:
 ```bash
 npm install
+cp .env.example .env    # fill in the values below
+npm run dev             # local dev (tsx watch)
 ```
 
-2. Copy environment variables:
-```bash
-cp .env.example .env
-```
+**Environment variables**
 
-3. Fill in `.env`:
-```
-PORT=3000
-WEB_ORIGIN=http://localhost:3001
-MONGODB_URI=your_mongodb_connection_string
-JWT_SECRET=your_jwt_secret
-GROQ_API_KEY=your_groq_api_key
-GROQ_MODEL=openai/gpt-oss-120b
-GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-3.5-flash-lite
-```
+| Variable | Purpose |
+|---|---|
+| `PORT` | Server port |
+| `WEB_ORIGIN` | Allowed CORS origin (the frontend URL) |
+| `MONGODB_URI` | MongoDB connection string |
+| `JWT_SECRET` | JWT signing secret |
+| `GROQ_API_KEY` / `GROQ_MODEL` | Generation-side LLM |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Evaluation-side LLM |
 
-4. Run in development (auto-restart on change):
-```bash
-npm run dev
-```
+Secrets live in env only; `.env` is gitignored.
 
-5. Run as it runs in production (no separate build step needed — `tsx` runs TS directly):
-```bash
-npm start
-```
+**Deploy:** the API is deployed on Render (build `npm install`, start
+`tsx src/index.ts`); the same env vars are set in the host dashboard.
 
-The API listens on `http://localhost:3000`.
+## Key design decisions and trade-offs
 
-## API endpoints
-
-All `/api/*` routes except `/api/auth/*` require `Authorization: Bearer <jwt>`.
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/health` | Health check with trace ID |
-| POST | `/api/auth/register` | Create a user, returns `{ user, token }` |
-| POST | `/api/auth/login` | Returns `{ user, token }` |
-| POST | `/api/plan` | Runs the 5-agent pipeline on a free-text request, persists and returns the trip |
-| GET | `/api/trips` | List the authenticated user's trips |
-| GET | `/api/trips/:id` | Get one trip (owner-scoped) |
-| PUT | `/api/trips/:id` | Update a trip (owner-scoped) |
-| DELETE | `/api/trips/:id` | Delete a trip (owner-scoped) |
-| POST | `/api/trips/:id/days/:day/activities` | Add an activity to a day |
-| DELETE | `/api/trips/:id/days/:day/activities/:idx` | Remove an activity from a day |
-| POST | `/api/trips/:id/days/:day/regenerate` | Re-run research + budget for one day, merge back, re-validate the full trip |
-
-## Architecture notes
-
-- **CORS:** allows `WEB_ORIGIN` plus any `https://travel-planner-*.vercel.app` preview/prod deployment
-- **Trace ID:** every request gets a unique trace ID, threaded through logs and error responses
-- **Error handling:** centralized middleware; agent failures never bubble up as raw 500s from `/api/plan` — they degrade to warnings on a partial plan
-- **Validation:** all LLM JSON output is parsed through Zod schemas (`src/agents/schemas.ts`); malformed output triggers the repair loop, not a crash
-- **Hotel dedup:** hotel suggestions are deduplicated by `name+area` at generation time and again at response time, so LLM-hallucinated duplicates never reach the user
+- **Five agents, not seven.** The design extends to seven (splitting research
+  into destination + transport, promoting parse/merge to dedicated agents), but
+  five keeps each agent substantive rather than padding the count; the extension
+  is additive because the orchestrator iterates an agent list.
+- **LLM-driven v1 behind a data seam.** Ships fast with no external data
+  dependency, and leaves a clean upgrade path to real place/price data.
+- **Budget optimizes for a *sufficient* plan within budget, not maximum spend.**
+  A ₹50k request may produce a good ₹15k plan — deliberately leaving headroom
+  the user can fill via editing, rather than inflating cost to hit the ceiling.
+- **Rate-limit handling.** LLM calls retry once with a capped backoff on 429,
+  then degrade gracefully; identical requests are cached during development to
+  conserve quota.
 
 ## Known limitations
 
-- LLM-generated costs, timings, and hotel suggestions are estimates — the itinerary carries an explicit disclaimer and should be verified before booking
-- Rate limits (especially Groq's per-minute token limit) can slow generation under load; the orchestrator waits/retries rather than failing, so a plan can take up to ~30s
-- `buildTrace` is only populated for trips created after this feature shipped; older trips render the results view without the panel
+- Free-tier API cold starts (~30–50s after idle).
+- Costs and timings are LLM estimates, not live prices.
+- Map geocoding is neighborhood-level and best-effort; vague names fall back to
+  city center.
+
+## Future work
+
+- Real-data grounding via the `dataSource` seam (places API / RAG / live feeds).
+- Per-activity map pins with day routes drawn between stops.
+- Voice interface (speech-to-text request, text-to-speech itinerary) — the
+  request layer is already text-based, so a voice front-end drops in cleanly.
+- The seven-agent decomposition for finer separation.
